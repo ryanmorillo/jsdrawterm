@@ -77,7 +77,13 @@ Module['onRuntimeInitialized'] = () => {
 		record_free: record_free,
 	};
 	console.log('C functions wrapped, calling main()...');
-	main();
+	
+	// Wait for DOM to be ready before calling main
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', main);
+	} else {
+		main();
+	}
 };
 
 function withBuf(n, f) {
