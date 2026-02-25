@@ -8,18 +8,6 @@ var ncpu_url = "ws://localhost:1236";
 /* Auth server is on the same host as CPU server in 9front */
 var auth_url = "ws://localhost:1235";
 
-/* mouse safety:
- * when enabled, multi-button chords are blocked unless modifier is held.
- * modifier: "alt" | "ctrl" | "shift" | "meta"
- */
-var safe_mouse_mode = true;
-var safe_mouse_modifier = "alt";
-
-/* pointer lock:
- * click canvas to lock pointer (Esc releases lock).
- */
-var pointer_lock_mode = true;
-
 /* you can set the following items to undefined if you want them queried */
 
 /* default user */
