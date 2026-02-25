@@ -177,7 +177,7 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			// Create a ticket for inline PAK
 			console.log('inlinePAK: creating client ticket');
 			let ticket = {
-				num: AuthTc,  // Client ticket, not server ticket!
+				num: AuthTs,  // Server ticket (encrypted with PAK key)
 				chal: tr.chal,
 				cuid: user,
 				suid: user,
@@ -204,6 +204,9 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			combined.set(ticketMsg, 0);
 			combined.set(authMsg, TICKETLEN);
 			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
+			console.log('inlinePAK: ticket starts with:', Array.from(ticketMsg.slice(0, 10)));
+			console.log('inlinePAK: auth starts with:', Array.from(authMsg.slice(0, 10)));
+			console.log('inlinePAK: combined length:', combined.length);
 			
 			return chan.write(combined)
 			.then(() => {
