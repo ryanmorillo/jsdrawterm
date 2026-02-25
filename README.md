@@ -36,7 +36,7 @@ Instead of running `python -m http.server`, use the helper script which:
 Example:
 
 ```
-./jsdrawterm_user_server_setup YOUR.SERVER --no-auth --user USER --domain DOMAIN.TLD
+./jsdrawterm_user_server_setup YOUR_SERVER --no-auth --user USER --domain DOMAIN.TLD
 ```
 
 Open `http://localhost:8000/drawterm.html` afterwards.
