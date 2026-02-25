@@ -186,7 +186,6 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			};
 			
 			// Encrypt the ticket (use PAK key for encryption)
-			let pakKey = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
 			let ticketMsg = withBuf(TICKETLEN, (buf, buf_array) => {
 				buf_array().set(pack(Ticket, ticket).data());
 				C.form1B2M(buf, TICKETLEN, pakKey);
