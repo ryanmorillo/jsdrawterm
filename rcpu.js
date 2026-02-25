@@ -204,9 +204,10 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			combined.set(ticketMsg, 0);
 			combined.set(authMsg, TICKETLEN);
 			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
-			console.log('inlinePAK: ticket starts with:', Array.from(ticketMsg.slice(0, 10)));
-			console.log('inlinePAK: auth starts with:', Array.from(authMsg.slice(0, 10)));
+			console.log('inlinePAK: ticket starts with:', Array.from(ticketMsg.slice(0, 20)));
+			console.log('inlinePAK: auth starts with:', Array.from(authMsg.slice(0, 20)));
 			console.log('inlinePAK: combined length:', combined.length);
+			console.log('inlinePAK: full combined message:', Array.from(combined));
 			
 			return chan.write(combined)
 			.then(() => {
