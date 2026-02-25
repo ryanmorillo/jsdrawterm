@@ -320,14 +320,14 @@ function dp9ik(chan, dom) {
 			var hasPaky = !tr.paky.every(b => b === 0);
 			console.log('dp9ik: server provided PAK key, using inline PAK');
 			
-			// Use what the server sent - don't overwrite uid!
+			// Use what the server sent for authid/authdom, but set our own hostid/uid
 			tr.hostid = user;
-			// tr.uid is already set by server, don't overwrite it
-			console.log('dp9ik: using server authid:', Array.from(tr.authid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, ''));
-			console.log('dp9ik: using server uid:', Array.from(tr.uid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, ''));
-			console.log('dp9ik: password length:', password ? password.length : 'undefined');
+			tr.uid = user;
+			console.log('dp9ik: using user:', user);
+			console.log('dp9ik: server authid:', Array.from(tr.authid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, '') || '(empty)');
+			console.log('dp9ik: server authdom:', Array.from(tr.authdom).map(c => String.fromCharCode(c)).join('').replace(/\0/g, '') || '(empty)');
 			C.passtokey(authkey, password);
-			C.authpak_hash(authkey, tr.uid);
+			C.authpak_hash(authkey, user);
 			
 			if(hasPaky) {
 				// Server provided its public key - do inline PAK on this connection
