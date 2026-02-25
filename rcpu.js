@@ -140,6 +140,29 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 		console.log('inlinePAK: sending our PAK public key');
 		return chan.write(ybuf_array())
 		.then(() => {
+			console.log('inlinePAK: PAK public key sent, checking for tickets from server');
+			// Check if server sends tickets after PAK exchange
+			return chan.read(b => {
+				console.log('inlinePAK: buffer check after PAK - available bytes:', b.length);
+				if(b.length >= 2*TICKETLEN) {
+					console.log('inlinePAK: server sent tickets!');
+					return 2*TICKETLEN;
+				}
+				// If no tickets, continue with authenticator
+				console.log('inlinePAK: no tickets from server, proceeding with authenticator only');
+				return 0;
+			});
+		})
+		.then(ticketsOrEmpty => {
+			if(ticketsOrEmpty && ticketsOrEmpty.length > 0) {
+				console.log('inlinePAK: received tickets from server, processing...');
+				// Server sent tickets - process them
+				return ticketsOrEmpty;
+			}
+			console.log('inlinePAK: no tickets received');
+			return null;
+		})
+		.then(tickets => {
 			console.log('inlinePAK: finishing PAK with server public key');
 			// Copy server's public key to WASM memory
 			server_ybuf_array().set(tr.paky);
@@ -147,22 +170,72 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
 			console.log('inlinePAK: PAK complete, deriving session key');
 			// Derive the session key from PAK shared secret
+			let sessionKey = new Uint8Array(NONCELEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
+			sessionKey.set(k.slice(0, NONCELEN));
 			
-			console.log('inlinePAK: creating auth info (skipping authenticator exchange)');
-			// In inline PAK, the shared secret IS the session key
-			// No authenticator exchange needed
-			var ai = {
-				suid: user,
+			// Create a ticket for inline PAK
+			console.log('inlinePAK: creating client ticket');
+			let ticket = {
+				num: AuthTc,  // Client ticket, not server ticket!
+				chal: tr.chal,
 				cuid: user,
+				suid: user,
+				key: sessionKey
 			};
-			ai.secret = withBuf(256, (secret, secret_array) => {
-				// Use the full PAK shared secret (32 bytes)
-				secret_array().set(k.slice(0, 32));
-				return secret_array().slice(0, 32);
+			
+			// Encrypt the ticket (use PAK key for encryption)
+			console.log('inlinePAK: encrypting ticket');
+			let pakKey = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
+			let ticketMsg = withBuf(TICKETLEN, (buf, buf_array) => {
+				buf_array().set(pack(Ticket, ticket).data());
+				C.form1B2M(buf, TICKETLEN, pakKey);
+				return buf_array().slice();
 			});
-			console.log('inlinePAK: auth info created, secret length:', ai.secret.length);
-			return ai;
+			
+			// Create authenticator
+			console.log('inlinePAK: creating authenticator');
+			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
+			let authMsg = convA2M(auth, sessionKey);
+			console.log('inlinePAK: authenticator message length:', authMsg.length);
+			
+			// Combine ticket + authenticator into single 192-byte message (like strace shows)
+			let combined = new Uint8Array(TICKETLEN + AUTHENTLEN);
+			combined.set(ticketMsg, 0);
+			combined.set(authMsg, TICKETLEN);
+			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
+			
+			return chan.write(combined)
+			.then(() => {
+				console.log('inlinePAK: waiting for server authenticator');
+				return chan.read(b => {
+					if(b.length >= AUTHENTLEN) {
+						console.log('inlinePAK: reading server authenticator');
+						return AUTHENTLEN;
+					}
+					return -1;
+				});
+			})
+			.then(b => {
+				console.log('inlinePAK: received server authenticator, verifying');
+				let serverAuth = convM2A(b, sessionKey);
+				if(serverAuth.num != AuthAs || tsmemcmp(serverAuth.chal, cchal, CHALLEN) != 0)
+					throw new Error("inlinePAK: authenticator verification failed");
+				crand.subarray(NONCELEN).set(serverAuth.rand);
+				
+				// Derive final secret using hkdf
+				console.log('inlinePAK: deriving final secret with hkdf');
+				var ai = {
+					suid: user,
+					cuid: user,
+				};
+				ai.secret = withBuf(256, (secret, secret_array) => {
+					C.hkdf_x_plan9(crand, sessionKey, secret);
+					return secret_array().slice();
+				});
+				console.log('inlinePAK: auth complete, secret length:', ai.secret.length);
+				return ai;
+			});
 		});
 	})));
 }

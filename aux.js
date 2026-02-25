@@ -161,7 +161,7 @@ function Socket(ws) {
 	this.messageCount = 0;
 	this.ws.onmessage = event => {
 		this.messageCount++;
-		console.log('Socket: received message #' + this.messageCount + ':', event.data.byteLength, 'bytes');
+		console.log('Socket: received message #' + this.messageCount + ':', event.data.byteLength, 'bytes, readyState:', this.ws.readyState);
 		this.packet.write(new Uint8Array(event.data));
 	};
 	this.ws.onerror = event => {
@@ -173,6 +173,7 @@ function Socket(ws) {
 	};
 }
 Socket.prototype.read = function(check) {
+	console.log('Socket.read: websocket readyState:', this.ws.readyState, 'packet buffer:', this.packet.data.length, 'bytes');
 	return this.packet.read(check);
 };
 Socket.prototype.write = function(buf) {
