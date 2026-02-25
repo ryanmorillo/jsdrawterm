@@ -1,5 +1,7 @@
-Javascript Drawterm port
+Javascript Drawterm AI port
 ============================
+
+AI assisted to get it working, largely as a proof of concept for how capable different agents are. None of the new orgional work is mine.
 
 ***WARNING: PROBABLY INSECURE***
 
