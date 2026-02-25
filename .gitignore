@@ -1,2 +1,5 @@
 config.local.js
 drawterm.strace
+drawterm-debug.log
+drawterm.pcap
+nohup.out
