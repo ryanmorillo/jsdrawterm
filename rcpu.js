@@ -323,6 +323,8 @@ function dp9ik(chan, dom) {
 			// Use what the server sent - don't overwrite!
 			tr.hostid = user;
 			tr.uid = user;
+			console.log('dp9ik: password length:', password ? password.length : 'undefined');
+			console.log('dp9ik: password bytes:', password ? Array.from(password).map(c => c.charCodeAt(0)) : 'undefined');
 			C.passtokey(authkey, password);
 			C.authpak_hash(authkey, tr.uid);
 			
