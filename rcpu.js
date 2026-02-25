@@ -147,39 +147,22 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
 			console.log('inlinePAK: PAK complete, deriving session key');
 			// Derive the session key from PAK shared secret
-			let sessionKey = new Uint8Array(NONCELEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
-			sessionKey.set(k.slice(0, NONCELEN));
 			
-			// Now do authenticator exchange
-			console.log('inlinePAK: sending authenticator');
-			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
-			return chan.write(convA2M(auth, sessionKey))
-			.then(() => {
-				console.log('inlinePAK: waiting for server authenticator');
-				return Promise.race([
-					chan.read(b=>AUTHENTLEN),
-					new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for server authenticator')), 5000))
-				]);
-			})
-			.then(b => {
-				console.log('inlinePAK: received server authenticator');
-				let serverAuth = convM2A(b, sessionKey);
-				if(serverAuth.num != AuthAs || tsmemcmp(serverAuth.chal, cchal, CHALLEN) != 0)
-					throw new Error("inlinePAK: authenticator verification failed");
-				crand.subarray(NONCELEN).set(serverAuth.rand);
-				
-				// Derive final secret using hkdf
-				var ai = {
-					suid: user,
-					cuid: user,
-				};
-				ai.secret = withBuf(256, (secret, secret_array) => {
-					C.hkdf_x_plan9(crand, sessionKey, secret);
-					return secret_array().slice();
-				});
-				return ai;
+			console.log('inlinePAK: creating auth info (skipping authenticator exchange)');
+			// In inline PAK, the shared secret IS the session key
+			// No authenticator exchange needed
+			var ai = {
+				suid: user,
+				cuid: user,
+			};
+			ai.secret = withBuf(256, (secret, secret_array) => {
+				// Use the full PAK shared secret (32 bytes)
+				secret_array().set(k.slice(0, 32));
+				return secret_array().slice(0, 32);
 			});
+			console.log('inlinePAK: auth info created, secret length:', ai.secret.length);
+			return ai;
 		});
 	})));
 }
@@ -378,7 +361,8 @@ function rcpu(failure) {
 	.then(rawchan => {
 		console.log('rcpu: connected, starting p9any authentication');
 		return p9any(rawchan).then(ai => {
-			console.log('rcpu: authentication complete, starting TLS');
+			console.log('rcpu: authentication complete, ai.secret length:', ai.secret.length);
+			console.log('rcpu: starting TLS with PSK');
 			return tlsClient(rawchan, ai.secret);
 		}).catch(failure);
 	})

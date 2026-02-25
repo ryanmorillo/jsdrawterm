@@ -158,8 +158,10 @@ Packet.prototype.close = function() {
 function Socket(ws) {
 	this.ws = ws;
 	this.packet = new Packet();
+	this.messageCount = 0;
 	this.ws.onmessage = event => {
-		console.log('Socket: received', event.data.byteLength, 'bytes');
+		this.messageCount++;
+		console.log('Socket: received message #' + this.messageCount + ':', event.data.byteLength, 'bytes');
 		this.packet.write(new Uint8Array(event.data));
 	};
 	this.ws.onerror = event => {
@@ -167,6 +169,7 @@ function Socket(ws) {
 	};
 	this.ws.onclose = event => {
 		console.log('Socket: websocket closed:', event.code, event.reason);
+		this.packet.close();
 	};
 }
 Socket.prototype.read = function(check) {
