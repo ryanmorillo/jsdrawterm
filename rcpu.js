@@ -324,10 +324,14 @@ function dp9ik(chan, dom) {
 			tr.hostid = user;
 			tr.uid = user;
 			console.log('dp9ik: using user:', user);
+			console.log('dp9ik: using domain:', dom);
 			console.log('dp9ik: server authid:', Array.from(tr.authid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, '') || '(empty)');
 			console.log('dp9ik: server authdom:', Array.from(tr.authdom).map(c => String.fromCharCode(c)).join('').replace(/\0/g, '') || '(empty)');
 			C.passtokey(authkey, password);
-			C.authpak_hash(authkey, user);
+			// Try with domain appended
+			let userWithDomain = user + '@' + dom;
+			console.log('dp9ik: trying authpak_hash with:', userWithDomain);
+			C.authpak_hash(authkey, userWithDomain);
 			
 			if(hasPaky) {
 				// Server provided its public key - do inline PAK on this connection
