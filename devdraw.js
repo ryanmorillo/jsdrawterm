@@ -120,7 +120,9 @@ function devdraw() {
 		this.ref = 1;
 		this.id = m.id;
 		this.refresh = m.refresh;
-		if(m.refresh != 0 && m.refresh != 1)
+		// Refresh modes from draw.h:
+		// 0 = Refbackup, 1 = Refnone, 2 = Refmesg.
+		if(m.refresh != 0 && m.refresh != 1 && m.refresh != 2)
 			throw new Error("unknown refresh method " + m.refresh);
 		this.chan = m.chan;
 		this.r = m.r;
