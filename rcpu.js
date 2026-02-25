@@ -187,14 +187,14 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
 			let authMsg = convA2M(auth, sessionKey);
 			
-			// Send ticket and authenticator separately (try this approach)
-			console.log('inlinePAK: sending ticket (124 bytes)');
+			// Combine ticket + authenticator into single 192-byte message
+			// This matches what the strace shows - they must be sent together
+			let combined = new Uint8Array(TICKETLEN + AUTHENTLEN);
+			combined.set(ticketMsg, 0);
+			combined.set(authMsg, TICKETLEN);
+			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
 			
-			return chan.write(ticketMsg)
-			.then(() => {
-				console.log('inlinePAK: sending authenticator (68 bytes)');
-				return chan.write(authMsg);
-			})
+			return chan.write(combined)
 			.then(() => {
 				return chan.read(b => {
 					if(b.length >= AUTHENTLEN) {
