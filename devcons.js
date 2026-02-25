@@ -166,6 +166,52 @@ function devcons() {
 	const devzero = new File('zero', 0, dev);
 	devzero.read = function(fid, count, offset){return new Uint8Array(count);}
 	devzero.write = function(fid, data, offset){}
+
+	const safeMouseMode = typeof safe_mouse_mode === 'boolean' ? safe_mouse_mode : true;
+	const safeMouseModifier = typeof safe_mouse_modifier === 'string' ? safe_mouse_modifier : 'alt';
+	const pointerLockMode = typeof pointer_lock_mode === 'boolean' ? pointer_lock_mode : true;
+	let pointerLocked = false;
+	let mousex = 0;
+	let mousey = 0;
+
+	function clamp(v, lo, hi) {
+		if(v < lo) return lo;
+		if(v > hi) return hi;
+		return v;
+	}
+	function hasSafeModifier(event) {
+		switch(safeMouseModifier.toLowerCase()){
+		case 'ctrl':
+		case 'control':
+			return event.ctrlKey;
+		case 'shift':
+			return event.shiftKey;
+		case 'meta':
+			return event.metaKey;
+		case 'alt':
+		default:
+			return event.altKey;
+		}
+	}
+	function mapButtons(buttons) {
+		return buttons & 1 | buttons >> 1 & 2 | buttons << 1 & 4;
+	}
+	function buttonCount(buttons) {
+		return (buttons & 1) + ((buttons >> 1) & 1) + ((buttons >> 2) & 1);
+	}
+	function maybeFilterChord(mapped, event) {
+		if(!safeMouseMode)
+			return mapped;
+		if(buttonCount(mapped) <= 1)
+			return mapped;
+		if(hasSafeModifier(event))
+			return mapped;
+		return 0;
+	}
+
+	document.addEventListener('pointerlockchange', function() {
+		pointerLocked = document.pointerLockElement === canvas;
+	});
 	
 	var mousestate = 'm' + [0, 0, 0, 0].map(s => s.toString().padStart(11)).join(' ') + ' ';
 	var mousereaders = [];
@@ -181,17 +227,37 @@ function devcons() {
 			f('r' + mousestate.substr(1));
 	};
 	function mouse(event){
-		let rect = canvas.getBoundingClientRect()
-		let mousestate = 'm' + [
-				event.clientX - rect.left,
-				event.clientY - rect.top,
-				event.buttons & 1 | event.buttons >> 1 & 2 | event.buttons << 1 & 4,
+		let rect = canvas.getBoundingClientRect();
+		if(pointerLocked) {
+			mousex = clamp(mousex + event.movementX, 0, canvas.width - 1);
+			mousey = clamp(mousey + event.movementY, 0, canvas.height - 1);
+		} else {
+			mousex = clamp(event.clientX - rect.left, 0, canvas.width - 1);
+			mousey = clamp(event.clientY - rect.top, 0, canvas.height - 1);
+		}
+		let buttons = maybeFilterChord(mapButtons(event.buttons), event);
+		mousestate = 'm' + [
+				mousex,
+				mousey,
+				buttons,
 				event.timeStamp|0
 			].map(s => s.toString().padStart(11)).join(' ') + ' ';
 		let f = mousereaders.shift();
 		if(f !== undefined)
 			f(mousestate);
+		event.preventDefault();
 	}
+	function lockPointer(event) {
+		if(!pointerLockMode)
+			return;
+		if(document.pointerLockElement === canvas)
+			return;
+		let p = canvas.requestPointerLock();
+		if(p && typeof p.catch === 'function')
+			p.catch(() => {});
+		event.preventDefault();
+	}
+	canvas.addEventListener('mousedown', lockPointer);
 	canvas.addEventListener('mousedown', mouse);
 	canvas.addEventListener('mousemove', mouse);
 	canvas.addEventListener('mouseup', mouse);
