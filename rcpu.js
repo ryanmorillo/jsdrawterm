@@ -161,6 +161,16 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
 			console.log('inlinePAK: PAK complete, creating ticket+authenticator');
 			
+			// Get PAK key for encryption
+			let pakKey = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
+			
+			// HACK: The form1B2M counter needs to start at 1, not 0
+			// Call it once with a dummy buffer to increment the counter
+			withBuf(12, (dummybuf, dummybuf_array) => {
+				dummybuf_array()[0] = AuthTs;
+				C.form1B2M(dummybuf, 12, pakKey);
+			});
+			
 			// Derive the session key from PAK shared secret
 			let sessionKey = new Uint8Array(NONCELEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
