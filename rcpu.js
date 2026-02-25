@@ -136,6 +136,12 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 	withBufP(PAKPRIVSZ, priv =>
 	withBufP(PAKYLEN, (server_ybuf, server_ybuf_array) => {
 		C.authpak_new(priv, authkey, ybuf, 1);
+		console.log('inlinePAK: our PAK public key (56 bytes):');
+		let ourPakKey = ybuf_array();
+		for(let i = 0; i < 56; i += 16) {
+			let hex = Array.from(ourPakKey.slice(i, i+16)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+			console.log('  ' + i.toString(16).padStart(4, '0') + ': ' + hex);
+		}
 		return chan.write(ybuf_array())
 		.then(() => {
 			// Check if server sends tickets after PAK exchange
