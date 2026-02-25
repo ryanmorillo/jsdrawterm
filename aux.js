@@ -33,6 +33,7 @@ function malloc_info(topdown){
 }
 
 Module['onRuntimeInitialized'] = () => {
+	console.log('WASM Runtime initialized! Setting up C functions...');
 	C = {
 		mallocz: Module.cwrap('mallocz', 'number', ['number', 'number']),
 		free: Module.cwrap('free', null, ['number']),
@@ -75,6 +76,7 @@ Module['onRuntimeInitialized'] = () => {
 		record_malloc: record_malloc,
 		record_free: record_free,
 	};
+	console.log('C functions wrapped, calling main()...');
 	main();
 };
 
@@ -157,7 +159,14 @@ function Socket(ws) {
 	this.ws = ws;
 	this.packet = new Packet();
 	this.ws.onmessage = event => {
+		console.log('Socket: received', event.data.byteLength, 'bytes');
 		this.packet.write(new Uint8Array(event.data));
+	};
+	this.ws.onerror = event => {
+		console.error('Socket: websocket error:', event);
+	};
+	this.ws.onclose = event => {
+		console.log('Socket: websocket closed:', event.code, event.reason);
 	};
 }
 Socket.prototype.read = function(check) {

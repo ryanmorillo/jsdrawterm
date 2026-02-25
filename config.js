@@ -2,14 +2,17 @@
 var rcpu_url = "ws://localhost:1234";
 
 /* connect to auth server, port 567 */
+/* Auth server is on the same host as CPU server in 9front */
 var auth_url = "ws://localhost:1235";
 
 /* you can set the following items to undefined if you want them queried */
 
 /* default user */
 //var user = undefined;
-var user = 'glenda';
+var user = 'USER';
 
 /* default password */
 //var password = undefined;
 var password = localStorage.getItem('drawterm password');
+var domain = 'DOMAIN.TLD';
+var dom = 'DOMAIN.TLD';

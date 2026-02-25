@@ -4,8 +4,41 @@
 <meta charset="utf-8">
 <title>drawterm</title>
 <script src="config.js" type="text/javascript"></script>
+<script>
+console.log('Config loaded, user:', typeof user !== 'undefined' ? user : 'undefined');
+console.log('Starting to load blob.js (WASM module)');
+
+// Catch any unhandled errors
+window.addEventListener('error', function(e) {
+	console.error('Global error:', e.message, e.filename, e.lineno, e.colno, e.error);
+});
+
+window.addEventListener('unhandledrejection', function(e) {
+	console.error('Unhandled promise rejection:', e.reason);
+});
+
+// Pre-configure Module before blob.js loads
+var Module = {
+	print: function(text) { console.log('WASM stdout:', text); },
+	printErr: function(text) { console.error('WASM stderr:', text); },
+	onAbort: function(what) { console.error('WASM aborted:', what); },
+};
+</script>
 <script src="blob.js" type="text/javascript"></script>
+<script>
+console.log('blob.js loaded, Module:', typeof Module);
+</script>
 <script src="aux.js" type="text/javascript"></script>
+<script>
+console.log('aux.js loaded');
+console.log('Waiting for WASM to initialize...');
+setTimeout(function() {
+	if(typeof C === 'undefined') {
+		console.error('WASM failed to initialize after 5 seconds!');
+		console.log('Check Network tab for blob.wasm loading issues');
+	}
+}, 5000);
+</script>
 <script src="rcpu.js" type="text/javascript"></script>
 <script src="tls.js" type="text/javascript"></script>
 <script src="9p.js" type="text/javascript"></script>
