@@ -1,6 +1,9 @@
 /* connect to cpu server, port 17019 */
 var rcpu_url = "ws://localhost:1234";
 
+/* optional: new window (ncpu) proxy, port 17010 on server */
+var ncpu_url = "ws://localhost:1236";
+
 /* connect to auth server, port 567 */
 /* Auth server is on the same host as CPU server in 9front */
 var auth_url = "ws://localhost:1235";

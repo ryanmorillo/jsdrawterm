@@ -33,7 +33,6 @@ function malloc_info(topdown){
 }
 
 Module['onRuntimeInitialized'] = () => {
-	console.log('WASM Runtime initialized! Setting up C functions...');
 	C = {
 		mallocz: Module.cwrap('mallocz', 'number', ['number', 'number']),
 		free: Module.cwrap('free', null, ['number']),
@@ -76,8 +75,6 @@ Module['onRuntimeInitialized'] = () => {
 		record_malloc: record_malloc,
 		record_free: record_free,
 	};
-	console.log('C functions wrapped, calling main()...');
-	
 	// Wait for DOM to be ready before calling main
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', main);
@@ -158,7 +155,7 @@ Packet.prototype.write = function(b) {
 }
 Packet.prototype.close = function() {
 	this.closed = true;
-	while(this.readers > 0)
+	while(this.readers.length > 0)
 		this.readers.shift()();
 }
 function Socket(ws) {
@@ -166,20 +163,16 @@ function Socket(ws) {
 	this.packet = new Packet();
 	this.messageCount = 0;
 	this.ws.onmessage = event => {
-		this.messageCount++;
-		console.log('Socket: received message #' + this.messageCount + ':', event.data.byteLength, 'bytes, readyState:', this.ws.readyState);
 		this.packet.write(new Uint8Array(event.data));
 	};
 	this.ws.onerror = event => {
 		console.error('Socket: websocket error:', event);
 	};
 	this.ws.onclose = event => {
-		console.log('Socket: websocket closed:', event.code, event.reason);
 		this.packet.close();
 	};
 }
 Socket.prototype.read = function(check) {
-	console.log('Socket.read: websocket readyState:', this.ws.readyState, 'packet buffer:', this.packet.data.length, 'bytes');
 	return this.packet.read(check);
 };
 Socket.prototype.write = function(buf) {
@@ -195,7 +188,13 @@ function dial(str) {
 		var ws = new WebSocket(str);
 		ws.binaryType = 'arraybuffer';
 		ws.onopen = () => resolve(new Socket(ws));
-		ws.onerror = reject;
+		ws.onerror = event => {
+			let err = new Error("WebSocket connection failed");
+			err.ws_url = str;
+			if(typeof window !== 'undefined' && typeof window.reportWebsocketError === 'function')
+				window.reportWebsocketError(str, event);
+			reject(err);
+		};
 	});
 }
 function readstr(chan) {
@@ -492,4 +491,3 @@ function Select(fn, data) {
 		}
 	};
 }
-

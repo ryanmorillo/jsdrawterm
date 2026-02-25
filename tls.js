@@ -205,7 +205,6 @@ function tlsClient(chan, psk) {
 		if(!(f[1] in alerts)) botch();
 		switch(f[0]){
 		case 1:
-			console.log('TLS ALERT: WARNING: ' + alerts[f[1]]);
 			break;
 		case 2:
 			throw new Error('TLS ALERT: FATAL: ' + alerts[f[1]]);
@@ -297,9 +296,7 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function recvServerHello() {
-		console.log('TLS: waiting for ServerHello');
 		return recvHandshake().then(m => {
-			console.log('TLS: received ServerHello');
 			if(m.msg_type != HServerHello) botch();
 			if(m.server_version != 0x0303) botch();
 			if(m.session_id.length != 0) botch();
@@ -310,9 +307,7 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function recvServerHelloDone() {
-		console.log('TLS: waiting for ServerHelloDone');
 		return recvHandshake().then(m => {
-			console.log('TLS: received ServerHelloDone');
 			if(m.msg_type != HServerHelloDone) botch();
 		});
 	}
@@ -360,10 +355,8 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function runHandshake() {
-		console.log('TLS: starting handshake');
 		return sendClientHello()
 			.then(() => {
-				console.log('TLS: ClientHello sent');
 				return recvServerHello();
 			})
 			.then(recvServerHelloDone)

@@ -260,7 +260,6 @@ function NineP(chan){
 	}
 	function newReq(m) {
 		if(m.tag in tags){
-			console.log('9P: duplicate tag ' + m.tag);
 			return null;
 		}
 		var req = new Req(m);

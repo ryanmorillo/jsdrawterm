@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: ./jsdrawterm_user_server_setup [YOUR.SERVER] [options]
+
+Options:
+  --server HOST           Remote server hostname/IP (if not passed positionally)
+  --http-port PORT        Local HTTP server port (default: 8000)
+  --write-config          Write config.local.js based on options
+
+Notes:
+  - If config.local.js exists it is used, otherwise config.js.
+  - Websockify is started only when needed and a server is provided.
+USAGE
+}
+
+server=""
+http_port=8000
+write_config=0
+
+if [[ $# -gt 0 && $1 != --* ]]; then
+  server="$1"
+  shift
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server) server="$2"; shift 2;;
+    --http-port) http_port="$2"; shift 2;;
+    --write-config) write_config=1; shift;;
+    -h|--help) usage; exit 0;;
+    *) echo "Unknown option: $1"; usage; exit 1;;
+  esac
+done
+
+config_file=""
+if [[ -f config.local.js ]]; then
+  config_file="config.local.js"
+elif [[ -f config.js ]]; then
+  config_file="config.js"
+fi
+
+get_var() {
+  local name="$1"
+  local file="$2"
+  local line
+  if [[ -z "$file" ]]; then
+    echo ""
+    return
+  fi
+  line=$(grep -E "^var[[:space:]]+${name}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1 || true)
+  if [[ -z "$line" ]]; then
+    echo ""
+    return
+  fi
+  echo "$line" | sed -E "s/.*=[[:space:]]*//; s/[;[:space:]]*$//"
+}
+
+strip_quotes() {
+  local v="$1"
+  v="${v%\"}"
+  v="${v#\"}"
+  echo "$v"
+}
+
+ws_port_from_url() {
+  local url="$1"
+  if [[ -z "$url" ]]; then
+    echo ""
+    return
+  fi
+  url=$(strip_quotes "$url")
+  if [[ "$url" == "undefined" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "$url" != ws://localhost:* && "$url" != wss://localhost:* ]]; then
+    echo ""
+    return
+  fi
+  echo "$url" | sed -E 's#^[a-z]+://localhost:([0-9]+).*#\1#'
+}
+
+port_listening() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" | grep -q ":$port"
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | grep -q ":$port "
+  else
+    return 1
+  fi
+}
+
+if [[ $write_config -eq 1 ]]; then
+  python - <<'PY'
+import re, pathlib
+src = pathlib.Path('config.js')
+if not src.exists():
+    raise SystemExit('config.js not found')
+lines = src.read_text().splitlines()
+vars_wanted = ['rcpu_url','ncpu_url','auth_url','user','password','domain','dom']
+found = {}
+for line in lines:
+    m = re.match(r"\\s*var\\s+(\\w+)\\s*=\\s*(.*?);\\s*$", line)
+    if not m:
+        continue
+    name, val = m.group(1), m.group(2)
+    if name in vars_wanted:
+        found[name] = val
+out = ['// Auto-generated from config.js']
+for name in vars_wanted:
+    if name in found:
+        out.append(f"var {name} = {found[name]};")
+path = pathlib.Path('config.local.js')
+path.write_text("\\n".join(out) + "\\n")
+print('Wrote config.local.js')
+PY
+  config_file="config.local.js"
+fi
+
+rcpu_url=$(get_var rcpu_url "$config_file")
+ncpu_url=$(get_var ncpu_url "$config_file")
+auth_url=$(get_var auth_url "$config_file")
+
+rcpu_port=$(ws_port_from_url "$rcpu_url")
+ncpu_port=$(ws_port_from_url "$ncpu_url")
+auth_port=$(ws_port_from_url "$auth_url")
+
+if [[ -z "$config_file" ]]; then
+  echo "No config.local.js or config.js found. Using defaults." >&2
+  rcpu_port=${rcpu_port:-1234}
+  ncpu_port=${ncpu_port:-1236}
+  auth_port=${auth_port:-1235}
+fi
+
+if [[ -z "$ncpu_port" ]]; then
+  echo "Warning: ncpu_url not set; new windows will fail." >&2
+fi
+
+if ! command -v websockify >/dev/null 2>&1; then
+  echo "websockify not found in PATH." >&2
+  exit 1
+fi
+
+pids=()
+cleanup() {
+  for pid in "${pids[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup EXIT
+
+start_proxy() {
+  local local_port="$1"
+  local remote_port="$2"
+  if [[ -z "$local_port" ]]; then
+    return
+  fi
+  if port_listening "$local_port"; then
+    return
+  fi
+  if [[ -z "$server" ]]; then
+    echo "Missing server for websockify. Run:" >&2
+    echo "  websockify ${local_port} YOUR.SERVER:${remote_port} --verbose --traffic" >&2
+    return
+  fi
+  websockify "$local_port" "$server":"$remote_port" --verbose --traffic &
+  pids+=("$!")
+}
+
+start_proxy "$rcpu_port" 17019
+start_proxy "$ncpu_port" 17010
+if [[ -n "$auth_port" ]]; then
+  start_proxy "$auth_port" 567
+fi
+
+python - <<PY
+import http.server, socketserver
+class H(http.server.SimpleHTTPRequestHandler):
+    extensions_map = dict(http.server.SimpleHTTPRequestHandler.extensions_map)
+    extensions_map['.wasm'] = 'application/wasm'
+with socketserver.TCPServer(('', ${http_port}), H) as httpd:
+    print('HTTP server on port ${http_port}')
+    httpd.serve_forever()
+PY

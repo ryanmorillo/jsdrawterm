@@ -35,6 +35,8 @@ const AuthTp = 68;
 const PAKPRIVSZ = 4 + PAKXLEN + PAKYLEN;
 const AUTHKEYSZ = DESKEYLEN + AESKEYLEN + PAKKEYLEN + PAKHASHLEN;
 
+const TICKETPLAINLEN = 1 + CHALLEN + 2 * ANAMELEN + NONCELEN;
+const AUTHENTPLAINLEN = 1 + CHALLEN + NONCELEN;
 const TICKETLEN = 12 + CHALLEN + 2 * ANAMELEN + NONCELEN + 16;
 const AUTHENTLEN = 12 + CHALLEN + NONCELEN + 16;
 
@@ -70,23 +72,74 @@ function tsmemcmp(a, b, n)
 	return diff;
 }
 
+function showError(msg) {
+	let error = document.getElementById('error');
+	if(!error)
+		return;
+	document.getElementById('thegrey').style.display = 'flex';
+	error.style.display = 'block';
+	error.style.whiteSpace = 'pre-wrap';
+	error.textContent = msg;
+	document.getElementById('login').style.display = 'grid';
+	document.getElementById('loading').style.display = 'none';
+}
+
+function websockifyAdvice(url) {
+	let u;
+	try {
+		u = new URL(url);
+	} catch (e) {
+		return null;
+	}
+	let port = u.port ? parseInt(u.port, 10) : (u.protocol === 'wss:' ? 443 : 80);
+	let info = null;
+	switch(port) {
+	case 17019: info = {remote: 17019, local: 1234, config: 'rcpu_url'}; break;
+	case 17010: info = {remote: 17010, local: 1236, config: 'ncpu_url'}; break;
+	case 567: info = {remote: 567, local: 1235, config: 'auth_url'}; break;
+	case 1234: info = {remote: 17019, local: 1234, config: 'rcpu_url'}; break;
+	case 1236: info = {remote: 17010, local: 1236, config: 'ncpu_url'}; break;
+	case 1235: info = {remote: 567, local: 1235, config: 'auth_url'}; break;
+	default: return null;
+	}
+	return [
+		"WebSocket connection failed.",
+		"Run:",
+		"  websockify " + info.local + " YOUR.SERVER:" + info.remote + " --verbose --traffic",
+		"Then set `" + info.config + "` to `ws://localhost:" + info.local + "` in config.js."
+	].join("\n");
+}
+
+function formatError(err) {
+	if(err && err.ws_url) {
+		let msg = websockifyAdvice(err.ws_url);
+		if(msg)
+			return msg;
+	}
+	if(err && err.toString)
+		return err.toString();
+	return String(err);
+}
+
+if(typeof window !== 'undefined') {
+	window.reportWebsocketError = function(url) {
+		let msg = websockifyAdvice(url);
+		if(msg)
+			showError(msg);
+	};
+}
+
 function asrdresp(chan, len)
 {
-	console.log('asrdresp: starting to read response, expecting', len, 'bytes');
 	return chan.read(b=>1).then(c => {
-		console.log('asrdresp: received response type:', c[0], '(AuthOK=4, AuthErr=5, AuthOKvar=9)');
 		switch(c[0]){
 		case AuthOK:
-			console.log('asrdresp: AuthOK, reading', len, 'bytes');
 			return chan.read(b=>len);
 		case AuthErr:
-			console.log('asrdresp: AuthErr, reading error message');
 			return chan.read(b=>64).then(e => {throw new Error("remote: " + from_cstr(e))});
 		case AuthOKvar:
-			console.log('asrdresp: AuthOKvar, reading length');
 			return chan.read(b=>5).then(b => {
 				var n = from_cstr(b)|0;
-				console.log('asrdresp: AuthOKvar length:', n);
 				if(n <= 0 || n > len)
 					throw new Error("AS protocol botch");
 				return chan.read(b=>n)
@@ -94,9 +147,6 @@ function asrdresp(chan, len)
 		default:
 			throw new Error("AS protocol botch: unexpected response type " + c[0]);
 		}
-	}).catch(err => {
-		console.error('asrdresp: error:', err);
-		throw err;
 	});
 }
 
@@ -131,33 +181,22 @@ function convM2A(b, key)
 
 function inlinePAK(chan, authkey, tr, crand, cchal)
 {
-	console.log('inlinePAK: starting PAK exchange');
 	return withBufP(PAKYLEN, (ybuf, ybuf_array) =>
 	withBufP(PAKPRIVSZ, priv =>
 	withBufP(PAKYLEN, (server_ybuf, server_ybuf_array) => {
 		C.authpak_new(priv, authkey, ybuf, 1);
-		console.log('inlinePAK: our PAK public key (56 bytes):');
-		let ourPakKey = ybuf_array();
-		for(let i = 0; i < 56; i += 16) {
-			let hex = Array.from(ourPakKey.slice(i, i+16)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-			console.log('  ' + i.toString(16).padStart(4, '0') + ': ' + hex);
-		}
 		return chan.write(ybuf_array())
 		.then(() => {
 			// Check if server sends tickets after PAK exchange
 			return chan.read(b => {
-				if(b.length >= 2*TICKETLEN) {
-					console.log('inlinePAK: server sent tickets');
+				if(b.length >= 2*TICKETLEN)
 					return 2*TICKETLEN;
-				}
 				return 0;
 			});
 		})
 		.then(ticketsOrEmpty => {
-			if(ticketsOrEmpty && ticketsOrEmpty.length > 0) {
-				console.log('inlinePAK: processing server tickets');
+			if(ticketsOrEmpty && ticketsOrEmpty.length > 0)
 				return ticketsOrEmpty;
-			}
 			return null;
 		})
 		.then(tickets => {
@@ -165,79 +204,73 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			server_ybuf_array().set(tr.paky);
 			if(C.authpak_finish(priv, authkey, server_ybuf))
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
-			console.log('inlinePAK: PAK complete, creating ticket+authenticator');
 			
-			// Get PAK key for encryption
-			let pakKey = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
+			// Get PAK key for encryption - must be a proper Uint8Array for form1B2M
+			let pakKeyPtr = authkey + AESKEYLEN + DESKEYLEN;
+			let pakKey = new Uint8Array(Module.HEAPU8.subarray(pakKeyPtr, pakKeyPtr + PAKKEYLEN));
 			
-			// HACK: The form1B2M counter needs to start at 1, not 0
-			// Call it once with a dummy buffer to increment the counter
+			// form1B2M uses a global counter that starts at 0
+			// We need ticket to have counter=1 and authenticator to have counter=2
+			// So we need to call form1B2M once with a dummy buffer to increment to 1
 			withBuf(12, (dummybuf, dummybuf_array) => {
 				dummybuf_array()[0] = AuthTs;
 				C.form1B2M(dummybuf, 12, pakKey);
 			});
 			
-			// Derive the session key from PAK shared secret
+			// Create a RANDOM session key (not derived from PAK key!)
 			let sessionKey = new Uint8Array(NONCELEN);
-			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
-			sessionKey.set(k.slice(0, NONCELEN));
+			window.crypto.getRandomValues(sessionKey);
 			
 			// Create a ticket for inline PAK
+			// Note: cuid and suid should just be the username, not user@domain
 			let ticket = {
 				num: AuthTs,  // Server ticket (encrypted with PAK key)
-				chal: tr.chal,
+				chal: new Uint8Array(tr.chal),
 				cuid: user,
 				suid: user,
 				key: sessionKey
 			};
-			console.log('inlinePAK: ticket contents:', {
-				num: ticket.num,
-				chal: Array.from(ticket.chal),
-				cuid: ticket.cuid,
-				suid: ticket.suid,
-				keyLen: ticket.key.length
-			});
-			
 			// Encrypt the ticket (use PAK key for encryption)
 			let ticketMsg = withBuf(TICKETLEN, (buf, buf_array) => {
 				buf_array().set(pack(Ticket, ticket).data());
-				C.form1B2M(buf, TICKETLEN, pakKey);
+				C.form1B2M(buf, TICKETPLAINLEN, pakKey);
 				return buf_array().slice();
 			});
 			
 			// Create authenticator
-			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
-			let authMsg = convA2M(auth, sessionKey);
+			// Authenticator should use the server's challenge (tr.chal) to prove we received it
+			let auth = {
+				num: AuthAc, 
+				rand: new Uint8Array(crand.subarray(0, NONCELEN)), 
+				chal: new Uint8Array(tr.chal)
+			};
+			let authMsg = withBuf(AUTHENTLEN, (buf, buf_array) => {
+				buf_array().set(pack(Authenticator, auth).data());
+				C.form1B2M(buf, 1 + CHALLEN + NONCELEN, pakKey);
+				return buf_array().slice();
+			});
 			
 			// Combine ticket + authenticator into single 192-byte message
 			// This matches what the strace shows - they must be sent together
 			let combined = new Uint8Array(TICKETLEN + AUTHENTLEN);
 			combined.set(ticketMsg, 0);
 			combined.set(authMsg, TICKETLEN);
-			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
-			console.log('inlinePAK: FULL HEX DUMP:');
-			for(let i = 0; i < combined.length; i += 16) {
-				let hex = Array.from(combined.slice(i, i+16)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-				console.log('  ' + i.toString(16).padStart(4, '0') + ': ' + hex);
-			}
-			
 			return chan.write(combined)
 			.then(() => {
 				return chan.read(b => {
 					if(b.length >= AUTHENTLEN) {
 						return AUTHENTLEN;
 					}
-					if(b.length > 0) {
-						console.log('inlinePAK: partial data received:', b.length, 'bytes, expected', AUTHENTLEN);
-					}
 					return -1;
 				});
 			})
-			.then(b => {
-				console.log('inlinePAK: received server authenticator, verifying');
-				let serverAuth = convM2A(b, sessionKey);
-				if(serverAuth.num != AuthAs || tsmemcmp(serverAuth.chal, cchal, CHALLEN) != 0)
-					throw new Error("inlinePAK: authenticator verification failed");
+		.then(b => {
+			if(!b) {
+				throw new Error("inlinePAK: connection closed before server authenticator");
+			}
+			let serverAuth = convM2A(b, sessionKey);
+			if(serverAuth.num != AuthAs || tsmemcmp(serverAuth.chal, cchal, CHALLEN) != 0)
+				throw new Error("inlinePAK: authenticator verification failed");
 				crand.subarray(NONCELEN).set(serverAuth.rand);
 				
 				// Derive final secret using hkdf
@@ -249,61 +282,98 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 					C.hkdf_x_plan9(crand, sessionKey, secret);
 					return secret_array().slice();
 				});
-				console.log('inlinePAK: authentication complete');
 				return ai;
 			})
 			.catch(err => {
-				console.error('inlinePAK: error during authentication:', err);
 				throw err;
 			});
 		});
 	})));
 }
 
-function getastickets(authkey, tr, cpuchan)
-{
-	console.log('getastickets: starting');
+function mkservertickets(authkey, tr, serverPaky) {
+	if(tr.authid && tr.hostid && tr.authid !== tr.hostid) {
+		throw new Error("mkservertickets: authid != hostid; auth server required");
+	}
+	let usePak = !!serverPaky;
 	return withBufP(PAKYLEN, (ybuf, ybuf_array) =>
-	withBufP(PAKPRIVSZ, priv => {
-		// Use separate auth server if auth_url is defined, otherwise use CPU server connection
-		var authPromise = (typeof auth_url !== 'undefined' && auth_url) 
-			? (console.log('getastickets: dialing separate auth server at', auth_url), dial(auth_url))
-			: (console.log('getastickets: using CPU server for auth'), Promise.resolve(cpuchan));
-		
-		return authPromise.then(chan => {
-			console.log('getastickets: connected to auth server');
+	withBufP(PAKPRIVSZ, priv =>
+	withBufP(PAKYLEN, (server_ybuf, server_ybuf_array) => {
+		let authServerY = null;
+		if(usePak) {
+			server_ybuf_array().set(serverPaky);
+			C.authpak_new(priv, authkey, ybuf, 0);
+			if(C.authpak_finish(priv, authkey, server_ybuf))
+				throw new Error("mkservertickets: authpak_finish failed");
+			authServerY = ybuf_array().slice();
+		}
+		let pakKeyPtr = authkey + AESKEYLEN + DESKEYLEN;
+		let pakKey = new Uint8Array(Module.HEAPU8.subarray(pakKeyPtr, pakKeyPtr + PAKKEYLEN));
+		let sessionKey = new Uint8Array(NONCELEN);
+		window.crypto.getRandomValues(sessionKey);
+		let ticket = {
+			num: AuthTc,
+			chal: new Uint8Array(tr.chal),
+			cuid: user,
+			suid: user,
+			key: sessionKey
+		};
+		let clientTicket = withBuf(TICKETLEN, (buf, buf_array) => {
+			buf_array().set(pack(Ticket, ticket).data());
+			C.form1B2M(buf, TICKETPLAINLEN, pakKey);
+			return buf_array().slice();
+		});
+		ticket.num = AuthTs;
+		let serverTicket = withBuf(TICKETLEN, (buf, buf_array) => {
+			buf_array().set(pack(Ticket, ticket).data());
+			C.form1B2M(buf, TICKETPLAINLEN, pakKey);
+			return buf_array().slice();
+		});
+		let combined = new Uint8Array(2 * TICKETLEN);
+		combined.set(clientTicket, 0);
+		combined.set(serverTicket, TICKETLEN);
+		return {tickets: combined, y: authServerY};
+	})));
+}
+
+function getastickets(authkey, tr)
+{
+	return withBufP(PAKYLEN, (ybuf, ybuf_array) =>
+	withBufP(PAKPRIVSZ, priv =>
+	withBufP(PAKYLEN, (as_ybuf, as_ybuf_array) => {
+		return dial(auth_url).then(chan => {
 			tr.type = AuthPAK;
-			console.log('getastickets: sending ticketreq');
 			return chan.write(pack(Ticketreq, tr).data())
 			.then(() => {
-				console.log('getastickets: generating PAK public key');
 				C.authpak_new(priv, authkey, ybuf, 1);
-				console.log('getastickets: sending PAK public key');
 				return chan.write(ybuf_array());
 			}).then(() => {
-				console.log('getastickets: waiting for PAK response');
-				return asrdresp(chan, 2*PAKYLEN);
-			}
-			).then(buf => {
-				console.log('getastickets: received PAK response, finishing PAK');
-				tr.paky.set(buf.subarray(0, PAKYLEN));
-				ybuf_array().set(buf.subarray(PAKYLEN));
-				if(C.authpak_finish(priv, authkey, ybuf))
-					throw new Error("getastickets failure");
-				console.log('getastickets: PAK complete, requesting tickets');
+				return asrdresp(chan, PAKYLEN);
+			}).then(buf => {
+				as_ybuf_array().set(buf);
+				if(C.authpak_finish(priv, authkey, as_ybuf))
+					throw new Error("getastickets: authpak_finish failed");
 				tr.type = AuthTreq;
 				return chan.write(pack(Ticketreq, tr).data());
 			}).then(() => {
-				console.log('getastickets: waiting for ticket response');
 				return asrdresp(chan, 0);
-			}
-			).then(() => {
-				console.log('getastickets: reading tickets');
+			}).then(() => {
 				return chan.read(b=>2*TICKETLEN);
-			}
-			);
+			}).then(tickets => {
+				return {tickets, y: as_ybuf_array().slice()};
+			});
 		});
-	}));
+	})));
+}
+
+function gettickets(authkey, tr) {
+	let serverPaky = tr.paky;
+	if(typeof auth_url !== 'undefined' && auth_url) {
+		return getastickets(authkey, tr).catch(() => {
+			return mkservertickets(authkey, tr, serverPaky);
+		});
+	}
+	return mkservertickets(authkey, tr, serverPaky);
 }
 
 function dp9ik(chan, dom) {
@@ -312,7 +382,6 @@ function dp9ik(chan, dom) {
 	var authkey, auth;
 	var sticket, cticket;
 		
-	console.log('dp9ik: starting authentication');
 	return withBufP(AUTHKEYSZ, authkey => {
 		crand = new Uint8Array(2*NONCELEN);
 		cchal = new Uint8Array(CHALLEN);
@@ -326,44 +395,40 @@ function dp9ik(chan, dom) {
 		.then(b => {
 			tr = unpack(Ticketreq, b);
 			var hasPaky = !tr.paky.every(b => b === 0);
-			console.log('dp9ik: server provided PAK key, using inline PAK');
-			
+			var useInlinePak = (typeof use_inline_pak !== 'undefined' && use_inline_pak);
 			// Use what the server sent for authid/authdom, but set our own hostid/uid
 			tr.hostid = user;
 			tr.uid = user;
-			console.log('dp9ik: using user:', user);
-			C.passtokey(authkey, password);
-			C.authpak_hash(authkey, user);
 			
-			if(hasPaky) {
-				// Server provided its public key - do inline PAK on this connection
+			// Try using the server's authid for authpak_hash
+			let authUser = tr.authid || user;
+			C.passtokey(authkey, password);
+			C.authpak_hash(authkey, authUser);
+			
+			if(hasPaky && useInlinePak) {
+				// Optional inline PAK on the same connection
 				return inlinePAK(chan, authkey, tr, crand, cchal);
-			} else {
-				// Need separate auth server connection
-				console.log('dp9ik: no PAK key, using separate auth server');
-				return getastickets(authkey, tr, chan);
 			}
+			// Default: use auth server tickets (matches drawterm behavior)
+			return gettickets(authkey, tr);
 		}).then(result => {
 			if(result && result.suid) {
 				// Inline PAK returned auth info directly
-				console.log('dp9ik: using inline PAK auth info');
 				return result;
 			}
 			
 			// Traditional flow with tickets
-			console.log('dp9ik: processing tickets');
-			var tickets = result;
+			var tickets = result.tickets || result;
+			var authServerY = result.y;
 			sticket = tickets.subarray(TICKETLEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
-			console.log('dp9ik: decrypting client ticket');
 			return convM2T(tickets.subarray(0, TICKETLEN), k)
 			.then(tick => {
-				console.log('dp9ik: client ticket decrypted');
 				cticket = tick;
-				console.log('dp9ik: sending server public key');
-				return chan.write(tr.paky);
+				if(authServerY && authServerY.length === PAKYLEN) {
+					return chan.write(authServerY);
+				}
 			}).then(() => {
-				console.log('dp9ik: sending server ticket');
 				return chan.write(sticket);
 			})
 			.then(() => {
@@ -386,10 +451,7 @@ function dp9ik(chan, dom) {
 				return ai;
 			});
 		})
-		.then(ai => {
-			console.log('dp9ik: authentication complete');
-			return ai;
-		})
+		.then(ai => ai)
 		.finally(() => {
 			if(cticket){
 				cticket.key.fill(0);
@@ -429,6 +491,20 @@ function p9any(chan) {
 	}).then(() => dp9ik(chan, dom));
 }
 
+function resolveRcpuUrl() {
+	try {
+		let u = new URL(rcpu_url);
+		if(u.port === "17010") {
+			if(typeof ncpu_url !== 'undefined' && ncpu_url) {
+				return ncpu_url;
+			}
+			showError(websockifyAdvice("ws://YOUR.SERVER:17010") || "ncpu_url is not set");
+		}
+	} catch (e) {
+	}
+	return rcpu_url;
+}
+
 function rcpu(failure) {
 	const script = 
 "syscall fversion 0 65536 buf 256 >/dev/null >[2=1]\n" + 
@@ -441,22 +517,19 @@ function rcpu(failure) {
 "</dev/cons >/dev/cons >[2=1] service=cpu rc -li\n" + 
 "echo -n hangup >/proc/$pid/notepg\n";
 	
-	console.log('rcpu: starting connection to', rcpu_url);
-	return dial(rcpu_url)
+	const url = resolveRcpuUrl();
+	return dial(url)
 	.then(rawchan => {
-		console.log('rcpu: connected, starting p9any authentication');
 		return p9any(rawchan).then(ai => {
-			console.log('rcpu: authentication complete, ai.secret length:', ai.secret.length);
-			console.log('rcpu: starting TLS with PSK');
 			return tlsClient(rawchan, ai.secret);
 		}).catch(failure);
 	})
 	.then(chan => {
-		console.log('rcpu: TLS established, sending script');
 		if(chan)
 			return chan.write(new TextEncoder("utf-8").encode(script.length + "\n" + script))
 			.then(() => chan);
-	});
+	})
+	.catch(failure);
 }
 
 function main() {
@@ -480,10 +553,7 @@ function go(no_ui) {
 	document.getElementById('login').style.display = 'none';
 	document.getElementById('loading').style.display = '';
 	rcpu(e => {
-		document.getElementById('loading').style.display = 'none';
-		document.getElementById('login').style.display = 'grid';
-		document.getElementById('error').style.display = 'block';
-		document.getElementById('error').innerHTML = e.toString();
+		showError(formatError(e));
 		password = undefined;
 		main();
 	}).then(chan => {

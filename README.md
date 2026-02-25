@@ -25,6 +25,22 @@ websockify 1235 YOUR_SERVER:567
 
 - Enjoy.
 
+Quick local setup (recommended)
+--------------------------------
+
+Instead of running `python -m http.server`, use the helper script which:
+- Starts `websockify` for rcpu/ncpu/auth as configured
+- Writes `config.local.js` with matching `ws://` URLs
+- Serves `.wasm` with the correct MIME type
+
+Example:
+
+```
+./jsdrawterm_user_server_setup YOUR.SERVER --no-auth --user USER --domain DOMAIN.TLD
+```
+
+Open `http://localhost:8000/drawterm.html` afterwards.
+
 How to build
 -------------
 
