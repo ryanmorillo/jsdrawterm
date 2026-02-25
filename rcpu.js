@@ -184,6 +184,13 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 				suid: user,
 				key: sessionKey
 			};
+			console.log('inlinePAK: ticket contents:', {
+				num: ticket.num,
+				chal: Array.from(ticket.chal),
+				cuid: ticket.cuid,
+				suid: ticket.suid,
+				keyLen: ticket.key.length
+			});
 			
 			// Encrypt the ticket (use PAK key for encryption)
 			let ticketMsg = withBuf(TICKETLEN, (buf, buf_array) => {
