@@ -129,7 +129,7 @@ function convM2A(b, key)
 	});
 }
 
-function inlinePAK(chan, authkey, tr)
+function inlinePAK(chan, authkey, tr, crand, cchal)
 {
 	console.log('inlinePAK: starting inline PAK exchange');
 	return withBufP(PAKYLEN, (ybuf, ybuf_array) =>
@@ -145,12 +145,41 @@ function inlinePAK(chan, authkey, tr)
 			server_ybuf_array().set(tr.paky);
 			if(C.authpak_finish(priv, authkey, server_ybuf))
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
-			console.log('inlinePAK: PAK complete, reading tickets');
-			return chan.read(b=>2*TICKETLEN);
-		})
-		.then(tickets => {
-			console.log('inlinePAK: received', tickets.length, 'bytes of tickets');
-			return tickets;
+			console.log('inlinePAK: PAK complete, deriving session key');
+			// Derive the session key from PAK shared secret
+			let sessionKey = new Uint8Array(NONCELEN);
+			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
+			sessionKey.set(k.slice(0, NONCELEN));
+			
+			// Now do authenticator exchange
+			console.log('inlinePAK: sending authenticator');
+			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
+			return chan.write(convA2M(auth, sessionKey))
+			.then(() => {
+				console.log('inlinePAK: waiting for server authenticator');
+				return Promise.race([
+					chan.read(b=>AUTHENTLEN),
+					new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for server authenticator')), 5000))
+				]);
+			})
+			.then(b => {
+				console.log('inlinePAK: received server authenticator');
+				let serverAuth = convM2A(b, sessionKey);
+				if(serverAuth.num != AuthAs || tsmemcmp(serverAuth.chal, cchal, CHALLEN) != 0)
+					throw new Error("inlinePAK: authenticator verification failed");
+				crand.subarray(NONCELEN).set(serverAuth.rand);
+				
+				// Derive final secret using hkdf
+				var ai = {
+					suid: user,
+					cuid: user,
+				};
+				ai.secret = withBuf(256, (secret, secret_array) => {
+					C.hkdf_x_plan9(crand, sessionKey, secret);
+					return secret_array().slice();
+				});
+				return ai;
+			});
 		});
 	})));
 }
@@ -240,44 +269,57 @@ function dp9ik(chan, dom) {
 			if(hasPaky) {
 				// Server provided its public key - do inline PAK on this connection
 				console.log('dp9ik: doing inline PAK (no separate auth server)');
-				return inlinePAK(chan, authkey, tr);
+				return inlinePAK(chan, authkey, tr, crand, cchal);
 			} else {
 				// Need separate auth server connection
 				console.log('dp9ik: getting AS tickets from separate auth server');
 				return getastickets(authkey, tr, chan);
 			}
-		}).then(tickets => {
+		}).then(result => {
+			if(result && result.suid) {
+				// Inline PAK returned auth info directly
+				console.log('dp9ik: using inline PAK auth info');
+				return result;
+			}
+			
+			// Traditional flow with tickets
 			console.log('dp9ik: processing tickets');
+			var tickets = result;
 			sticket = tickets.subarray(TICKETLEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
 			console.log('dp9ik: decrypting client ticket');
-			return convM2T(tickets.subarray(0, TICKETLEN), k);
-		}).then(tick => {
-			console.log('dp9ik: client ticket decrypted');
-			cticket = tick;
-			console.log('dp9ik: sending server public key');
-			return chan.write(tr.paky);
-		}).then(() => {
-			console.log('dp9ik: sending server ticket');
-			return chan.write(sticket);
-		})
-		.then(() => {
-			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
-			return chan.write(convA2M(auth, cticket.key));
-		}).then(() => chan.read(b=>AUTHENTLEN))
-		.then(b => {
-			auth = convM2A(b, cticket.key);
-			if(auth.num != AuthAs || tsmemcmp(auth.chal, cchal, CHALLEN) != 0)
-				throw new Error("protocol botch");
-			crand.subarray(NONCELEN).set(auth.rand);
-			var ai = {
-				suid: cticket.suid,
-				cuid: cticket.cuid,
-			};
-			ai.secret = withBuf(256, (secret, secret_array) => {
-				C.hkdf_x_plan9(crand, cticket.key, secret);
-				return secret_array().slice();
+			return convM2T(tickets.subarray(0, TICKETLEN), k)
+			.then(tick => {
+				console.log('dp9ik: client ticket decrypted');
+				cticket = tick;
+				console.log('dp9ik: sending server public key');
+				return chan.write(tr.paky);
+			}).then(() => {
+				console.log('dp9ik: sending server ticket');
+				return chan.write(sticket);
+			})
+			.then(() => {
+				let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
+				return chan.write(convA2M(auth, cticket.key));
+			}).then(() => chan.read(b=>AUTHENTLEN))
+			.then(b => {
+				auth = convM2A(b, cticket.key);
+				if(auth.num != AuthAs || tsmemcmp(auth.chal, cchal, CHALLEN) != 0)
+					throw new Error("protocol botch");
+				crand.subarray(NONCELEN).set(auth.rand);
+				var ai = {
+					suid: cticket.suid,
+					cuid: cticket.cuid,
+				};
+				ai.secret = withBuf(256, (secret, secret_array) => {
+					C.hkdf_x_plan9(crand, cticket.key, secret);
+					return secret_array().slice();
+				});
+				return ai;
 			});
+		})
+		.then(ai => {
+			console.log('dp9ik: authentication complete');
 			return ai;
 		})
 		.finally(() => {

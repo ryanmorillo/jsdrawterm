@@ -297,7 +297,9 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function recvServerHello() {
+		console.log('TLS: waiting for ServerHello');
 		return recvHandshake().then(m => {
+			console.log('TLS: received ServerHello');
 			if(m.msg_type != HServerHello) botch();
 			if(m.server_version != 0x0303) botch();
 			if(m.session_id.length != 0) botch();
@@ -308,7 +310,9 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function recvServerHelloDone() {
+		console.log('TLS: waiting for ServerHelloDone');
 		return recvHandshake().then(m => {
+			console.log('TLS: received ServerHelloDone');
 			if(m.msg_type != HServerHelloDone) botch();
 		});
 	}
@@ -356,8 +360,12 @@ function tlsClient(chan, psk) {
 		});
 	}
 	function runHandshake() {
+		console.log('TLS: starting handshake');
 		return sendClientHello()
-			.then(recvServerHello)
+			.then(() => {
+				console.log('TLS: ClientHello sent');
+				return recvServerHello();
+			})
 			.then(recvServerHelloDone)
 			.then(sendClientKeyExchange)
 			.then(() => {
