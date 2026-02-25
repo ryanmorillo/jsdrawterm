@@ -131,51 +131,42 @@ function convM2A(b, key)
 
 function inlinePAK(chan, authkey, tr, crand, cchal)
 {
-	console.log('inlinePAK: starting inline PAK exchange');
+	console.log('inlinePAK: starting PAK exchange');
 	return withBufP(PAKYLEN, (ybuf, ybuf_array) =>
 	withBufP(PAKPRIVSZ, priv =>
 	withBufP(PAKYLEN, (server_ybuf, server_ybuf_array) => {
-		console.log('inlinePAK: generating our PAK public key');
 		C.authpak_new(priv, authkey, ybuf, 1);
-		console.log('inlinePAK: sending our PAK public key');
 		return chan.write(ybuf_array())
 		.then(() => {
-			console.log('inlinePAK: PAK public key sent, checking for tickets from server');
 			// Check if server sends tickets after PAK exchange
 			return chan.read(b => {
-				console.log('inlinePAK: buffer check after PAK - available bytes:', b.length);
 				if(b.length >= 2*TICKETLEN) {
-					console.log('inlinePAK: server sent tickets!');
+					console.log('inlinePAK: server sent tickets');
 					return 2*TICKETLEN;
 				}
-				// If no tickets, continue with authenticator
-				console.log('inlinePAK: no tickets from server, proceeding with authenticator only');
 				return 0;
 			});
 		})
 		.then(ticketsOrEmpty => {
 			if(ticketsOrEmpty && ticketsOrEmpty.length > 0) {
-				console.log('inlinePAK: received tickets from server, processing...');
-				// Server sent tickets - process them
+				console.log('inlinePAK: processing server tickets');
 				return ticketsOrEmpty;
 			}
-			console.log('inlinePAK: no tickets received');
 			return null;
 		})
 		.then(tickets => {
-			console.log('inlinePAK: finishing PAK with server public key');
 			// Copy server's public key to WASM memory
 			server_ybuf_array().set(tr.paky);
 			if(C.authpak_finish(priv, authkey, server_ybuf))
 				throw new Error("inlinePAK: authpak_finish failed - wrong password?");
-			console.log('inlinePAK: PAK complete, deriving session key');
+			console.log('inlinePAK: PAK complete, creating ticket+authenticator');
+			
 			// Derive the session key from PAK shared secret
 			let sessionKey = new Uint8Array(NONCELEN);
 			let k = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
 			sessionKey.set(k.slice(0, NONCELEN));
 			
 			// Create a ticket for inline PAK
-			console.log('inlinePAK: creating client ticket');
 			let ticket = {
 				num: AuthTs,  // Server ticket (encrypted with PAK key)
 				chal: tr.chal,
@@ -185,7 +176,6 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			};
 			
 			// Encrypt the ticket (use PAK key for encryption)
-			console.log('inlinePAK: encrypting ticket');
 			let pakKey = Module.HEAPU8.subarray(authkey + AESKEYLEN + DESKEYLEN, authkey + AESKEYLEN + DESKEYLEN + PAKKEYLEN);
 			let ticketMsg = withBuf(TICKETLEN, (buf, buf_array) => {
 				buf_array().set(pack(Ticket, ticket).data());
@@ -194,27 +184,19 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 			});
 			
 			// Create authenticator
-			console.log('inlinePAK: creating authenticator');
 			let auth = {num: AuthAc, rand: crand.subarray(0, NONCELEN), chal: tr.chal};
 			let authMsg = convA2M(auth, sessionKey);
-			console.log('inlinePAK: authenticator message length:', authMsg.length);
 			
 			// Combine ticket + authenticator into single 192-byte message (like strace shows)
 			let combined = new Uint8Array(TICKETLEN + AUTHENTLEN);
 			combined.set(ticketMsg, 0);
 			combined.set(authMsg, TICKETLEN);
-			console.log('inlinePAK: sending combined ticket+authenticator (192 bytes)');
-			console.log('inlinePAK: ticket starts with:', Array.from(ticketMsg.slice(0, 20)));
-			console.log('inlinePAK: auth starts with:', Array.from(authMsg.slice(0, 20)));
-			console.log('inlinePAK: combined length:', combined.length);
-			console.log('inlinePAK: full combined message:', Array.from(combined));
+			console.log('inlinePAK: sending ticket+authenticator (192 bytes)');
 			
 			return chan.write(combined)
 			.then(() => {
-				console.log('inlinePAK: waiting for server authenticator');
 				return chan.read(b => {
 					if(b.length >= AUTHENTLEN) {
-						console.log('inlinePAK: reading server authenticator');
 						return AUTHENTLEN;
 					}
 					return -1;
@@ -228,7 +210,6 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 				crand.subarray(NONCELEN).set(serverAuth.rand);
 				
 				// Derive final secret using hkdf
-				console.log('inlinePAK: deriving final secret with hkdf');
 				var ai = {
 					suid: user,
 					cuid: user,
@@ -237,7 +218,7 @@ function inlinePAK(chan, authkey, tr, crand, cchal)
 					C.hkdf_x_plan9(crand, sessionKey, secret);
 					return secret_array().slice();
 				});
-				console.log('inlinePAK: auth complete, secret length:', ai.secret.length);
+				console.log('inlinePAK: authentication complete');
 				return ai;
 			});
 		});
@@ -296,43 +277,34 @@ function dp9ik(chan, dom) {
 	var authkey, auth;
 	var sticket, cticket;
 		
-	console.log('dp9ik: starting authentication with domain:', dom);
+	console.log('dp9ik: starting authentication');
 	return withBufP(AUTHKEYSZ, authkey => {
 		crand = new Uint8Array(2*NONCELEN);
 		cchal = new Uint8Array(CHALLEN);
 		window.crypto.getRandomValues(crand);
 		window.crypto.getRandomValues(cchal);
 		
-		console.log('dp9ik: sending challenge');
 		return chan.write(cchal)
 		.then(() => {
-			console.log('dp9ik: reading ticketreq');
 			return chan.read(b=>Ticketreq.len);
 		})
 		.then(b => {
-			console.log('dp9ik: received ticketreq, unpacking');
 			tr = unpack(Ticketreq, b);
-			console.log('dp9ik: server sent authid:', Array.from(tr.authid.slice(0, 10)));
-			console.log('dp9ik: server sent authdom:', Array.from(tr.authdom.slice(0, 10)));
-			console.log('dp9ik: server sent paky (first 10 bytes):', Array.from(tr.paky.slice(0, 10)));
 			var hasPaky = !tr.paky.every(b => b === 0);
-			console.log('dp9ik: server provided paky?', hasPaky);
+			console.log('dp9ik: server provided PAK key, using inline PAK');
 			
 			// Use what the server sent - don't overwrite!
 			tr.hostid = user;
 			tr.uid = user;
-			console.log('dp9ik: converting password to key');
 			C.passtokey(authkey, password);
-			console.log('dp9ik: hashing authkey');
 			C.authpak_hash(authkey, tr.uid);
 			
 			if(hasPaky) {
 				// Server provided its public key - do inline PAK on this connection
-				console.log('dp9ik: doing inline PAK (no separate auth server)');
 				return inlinePAK(chan, authkey, tr, crand, cchal);
 			} else {
 				// Need separate auth server connection
-				console.log('dp9ik: getting AS tickets from separate auth server');
+				console.log('dp9ik: no PAK key, using separate auth server');
 				return getastickets(authkey, tr, chan);
 			}
 		}).then(result => {
