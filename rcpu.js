@@ -320,11 +320,12 @@ function dp9ik(chan, dom) {
 			var hasPaky = !tr.paky.every(b => b === 0);
 			console.log('dp9ik: server provided PAK key, using inline PAK');
 			
-			// Use what the server sent - don't overwrite!
+			// Use what the server sent - don't overwrite uid!
 			tr.hostid = user;
-			tr.uid = user;
+			// tr.uid is already set by server, don't overwrite it
+			console.log('dp9ik: using server authid:', Array.from(tr.authid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, ''));
+			console.log('dp9ik: using server uid:', Array.from(tr.uid).map(c => String.fromCharCode(c)).join('').replace(/\0/g, ''));
 			console.log('dp9ik: password length:', password ? password.length : 'undefined');
-			console.log('dp9ik: password bytes:', password ? Array.from(password).map(c => c.charCodeAt(0)) : 'undefined');
 			C.passtokey(authkey, password);
 			C.authpak_hash(authkey, tr.uid);
 			
