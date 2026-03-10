@@ -162,13 +162,15 @@ function Socket(ws) {
 	this.ws = ws;
 	this.packet = new Packet();
 	this.messageCount = 0;
+	this.ws_url = ws.url;
 	this.ws.onmessage = event => {
 		this.packet.write(new Uint8Array(event.data));
 	};
 	this.ws.onerror = event => {
-		console.error('Socket: websocket error:', event);
+		console.error('Socket: websocket error:', this.ws_url, event);
 	};
 	this.ws.onclose = event => {
+		console.warn('Socket: websocket closed:', this.ws_url, 'code=' + event.code, 'reason=' + (event.reason || '<empty>'));
 		this.packet.close();
 	};
 }

@@ -36,7 +36,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 config_file=""
-if [[ -f config.local.js ]]; then
+if [[ -f  $HOME/.config/jsdrawterm.config ]]; then
+  config_file="$HOME/.config/jsdrawterm.config"
+elif [[ -f config.local.js ]]; then
   config_file="config.local.js"
 elif [[ -f config.js ]]; then
   config_file="config.js"
@@ -46,13 +48,12 @@ get_var() {
   local name="$1"
   local file="$2"
   local line
-  if [[ -z "$file" ]]; then
-    echo ""
+  if [[ -z $file ]]; then
     return
   fi
   line=$(grep -E "^var[[:space:]]+${name}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1 || true)
   if [[ -z "$line" ]]; then
-    echo ""
+    echo "setting line for $name failed"
     return
   fi
   echo "$line" | sed -E "s/.*=[[:space:]]*//; s/[;[:space:]]*$//"
@@ -65,22 +66,47 @@ strip_quotes() {
   echo "$v"
 }
 
-ws_port_from_url() {
+has_config_url() {
   local url="$1"
   if [[ -z "$url" ]]; then
+    return 1
+  fi
+  url=$(strip_quotes "$url")
+  if [[ "$url" == "undefined" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+ws_port_from_url() {
+  local url="$1"
+  if ! has_config_url "$url"; then
     echo ""
     return
   fi
   url=$(strip_quotes "$url")
-  if [[ "$url" == "undefined" ]]; then
-    echo ""
-    return
-  fi
   if [[ "$url" != ws://localhost:* && "$url" != wss://localhost:* ]]; then
     echo ""
     return
   fi
   echo "$url" | sed -E 's#^[a-z]+://localhost:([0-9]+).*#\1#'
+}
+
+set_var_in_file() {
+  local file="$1"
+  local name="$2"
+  local value="$3"
+  if grep -Eq "^var[[:space:]]+${name}[[:space:]]*=" "$file"; then
+    sed -i -E "s#^var[[:space:]]+${name}[[:space:]]*=.*#var ${name} = ${value};#" "$file"
+  else
+    echo "var ${name} = ${value};" >> "$file"
+  fi
+}
+
+has_var_in_file() {
+  local file="$1"
+  local name="$2"
+  grep -Eq "^var[[:space:]]+${name}[[:space:]]*=" "$file"
 }
 
 port_listening() {
@@ -121,6 +147,23 @@ PY
   config_file="config.local.js"
 fi
 
+if [[ -n "$config_file" && "$config_file" != "config.local.js" ]]; then
+  cp "$config_file" config.local.js
+  config_file="config.local.js"
+  echo "Using config.local.js copied from \$HOME/.config/jsdrawterm.config"
+fi
+
+if [[ -f config.local.js ]]; then
+  # If user config does not define a domain, override config.js placeholders.
+  if ! has_var_in_file config.local.js domain; then
+    echo "var domain = undefined;" >> config.local.js
+    echo "Set domain to undefined in config.local.js (use server-offered auth domain)"
+  fi
+  if ! has_var_in_file config.local.js dom; then
+    echo "var dom = undefined;" >> config.local.js
+  fi
+fi
+
 rcpu_url=$(get_var rcpu_url "$config_file")
 ncpu_url=$(get_var ncpu_url "$config_file")
 auth_url=$(get_var auth_url "$config_file")
@@ -136,11 +179,32 @@ if [[ -z "$config_file" ]]; then
   auth_port=${auth_port:-1235}
 fi
 
-if [[ -z "$ncpu_port" ]]; then
+if ! has_config_url "$ncpu_url"; then
   echo "Warning: ncpu_url not set; new windows will fail." >&2
 fi
 
-if ! command -v websockify >/dev/null 2>&1; then
+if [[ -n "$server" && -f config.local.js ]]; then
+  if has_config_url "$rcpu_url" && [[ -z "$rcpu_port" ]]; then
+    rcpu_port=1234
+    set_var_in_file config.local.js rcpu_url "\"ws://localhost:${rcpu_port}\""
+    echo "Normalized rcpu_url to ws://localhost:${rcpu_port} (proxy to ${server}:17019)"
+  fi
+  if has_config_url "$ncpu_url" && [[ -z "$ncpu_port" ]]; then
+    ncpu_port=1236
+    set_var_in_file config.local.js ncpu_url "\"ws://localhost:${ncpu_port}\""
+    echo "Normalized ncpu_url to ws://localhost:${ncpu_port} (proxy to ${server}:17010)"
+  fi
+  if has_config_url "$auth_url" && [[ -z "$auth_port" ]]; then
+    auth_port=1235
+    set_var_in_file config.local.js auth_url "\"ws://localhost:${auth_port}\""
+    echo "Normalized auth_url to ws://localhost:${auth_port} (proxy to ${server}:567)"
+  fi
+fi
+
+websockify_cmd=()
+if command -v websockify >/dev/null 2>&1; then
+  websockify_cmd=(websockify)
+else
   echo "websockify not found in PATH." >&2
   exit 1
 fi
@@ -164,17 +228,31 @@ start_proxy() {
   fi
   if [[ -z "$server" ]]; then
     echo "Missing server for websockify. Run:" >&2
-    echo "  websockify ${local_port} YOUR.SERVER:${remote_port} --verbose --traffic" >&2
+    echo "  websockify ${local_port} YOUR.SERVER:${remote_port}" >&2
     return
   fi
-  websockify "$local_port" "$server":"$remote_port" --verbose --traffic &
+  echo "${websockify_cmd[*]} ${local_port} ${server}:${remote_port}"
+  "${websockify_cmd[@]}" "$local_port" "$server":"$remote_port" &
   pids+=("$!")
 }
 
 start_proxy "$rcpu_port" 17019
+if [[ -n "$rcpu_port" ]]; then
+  echo "Started rcpu proxy on port $rcpu_port"
+else
+  echo "rcpu_url is not localhost; skipping local rcpu proxy setup."
+fi
 start_proxy "$ncpu_port" 17010
+if [[ -n "$ncpu_port" ]]; then
+  echo "Started ncpu proxy on port $ncpu_port"
+else
+  echo "ncpu_url is not localhost; skipping local ncpu proxy setup."
+fi
 if [[ -n "$auth_port" ]]; then
   start_proxy "$auth_port" 567
+  echo "Started auth proxy"
+else
+  echo "auth_url is not localhost; skipping local auth proxy setup."
 fi
 
 python - <<PY
@@ -182,6 +260,11 @@ import http.server, socketserver
 class H(http.server.SimpleHTTPRequestHandler):
     extensions_map = dict(http.server.SimpleHTTPRequestHandler.extensions_map)
     extensions_map['.wasm'] = 'application/wasm'
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        super().end_headers()
 with socketserver.TCPServer(('', ${http_port}), H) as httpd:
     print('HTTP server on port ${http_port}')
     httpd.serve_forever()

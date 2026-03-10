@@ -105,7 +105,7 @@ function websockifyAdvice(url) {
 	return [
 		"WebSocket connection failed.",
 		"Run:",
-		"  websockify " + info.local + " YOUR.SERVER:" + info.remote + " --verbose --traffic",
+		"  websockify " + info.local + " YOUR.SERVER:" + info.remote,
 		"Then set `" + info.config + "` to `ws://localhost:" + info.local + "` in config.js."
 	].join("\n");
 }
@@ -369,7 +369,8 @@ function getastickets(authkey, tr)
 function gettickets(authkey, tr) {
 	let serverPaky = tr.paky;
 	if(typeof auth_url !== 'undefined' && auth_url) {
-		return getastickets(authkey, tr).catch(() => {
+		return getastickets(authkey, tr).catch(err => {
+			console.warn('gettickets: auth_url path failed, falling back to server-issued tickets:', err);
 			return mkservertickets(authkey, tr, serverPaky);
 		});
 	}
@@ -481,6 +482,7 @@ function p9any(chan) {
 			throw new Error("server did not offer dp9ik");
 		// Use configured domain if available, otherwise use server's first offered domain
 		dom = (typeof domain !== 'undefined' && domain) ? domain : doms[0];
+		console.log('p9any: selected auth domain:', dom);
 		return chan.write(new TextEncoder("utf-8").encode('dp9ik ' + dom + '\0'));
 	}).then(() => {
 		if(v2)
@@ -518,6 +520,7 @@ function rcpu(failure) {
 "echo -n hangup >/proc/$pid/notepg\n";
 	
 	const url = resolveRcpuUrl();
+	console.log('rcpu: connecting to', url, 'auth_url=', (typeof auth_url !== 'undefined' ? auth_url : '<undefined>'));
 	return dial(url)
 	.then(rawchan => {
 		return p9any(rawchan).then(ai => {
